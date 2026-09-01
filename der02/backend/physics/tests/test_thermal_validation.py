@@ -115,3 +115,39 @@ def test_wind_tilts_flame_and_reduces_flux():
 def test_thermal_bands_shape():
     assert [b["label"] for b in THERMAL_BANDS] == ["fatal", "serious", "pain"]
     assert [b["threshold_kw_m2"] for b in THERMAL_BANDS] == [37.5, 12.5, 4.0]
+
+
+# --- humidity: transmissivity now genuinely depends on it ----------------
+
+
+def test_humidity_reduces_transmissivity_at_fixed_distance():
+    tau_dry = transmissivity(x=100, humidity_pct=10)
+    tau_humid = transmissivity(x=100, humidity_pct=90)
+    assert tau_humid < tau_dry
+
+
+def test_zero_humidity_does_not_crash():
+    tau = transmissivity(x=100, humidity_pct=0)
+    assert 0.0 <= tau <= 1.0
+
+
+def test_full_humidity_range_stays_in_bounds():
+    for h in [0, 10, 25, 50, 75, 90, 100]:
+        tau = transmissivity(x=50, humidity_pct=h)
+        assert 0.0 <= tau <= 1.0
+
+
+def test_humidity_changes_the_final_hazard_radius():
+    flux_dry = thermal_flux(
+        x=100, substance_key="propane", tank_diameter_m=8, wind_speed_ms=0, humidity_pct=10
+    )
+    flux_humid = thermal_flux(
+        x=100, substance_key="propane", tank_diameter_m=8, wind_speed_ms=0, humidity_pct=90
+    )
+    assert flux_humid < flux_dry
+
+
+def test_transmissivity_backward_compatible_default_temp():
+    tau_explicit = transmissivity(x=50, humidity_pct=50, ambient_temp_c=20)
+    tau_default = transmissivity(x=50, humidity_pct=50)
+    assert tau_explicit == tau_default

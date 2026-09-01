@@ -22,6 +22,9 @@ DISCLOSED MODELLING CHOICES
 3. flame_tilt uses a fixed vapour density rather than a per-substance value.
 4. Degenerate geometry (non-positive diameter or flame height) returns 0.0
    flux rather than raising, so a caller sweeping distances cannot crash.
+5. transmissivity() uses the Wayne correlation, so relative humidity genuinely
+   affects the result. Ambient temperature defaults to 20 C because it is not
+   yet part of the request schema.
 
 MASS BURNING RATE
 -----------------
@@ -201,19 +204,36 @@ def view_factor(x, D, H_flame, tilt_angle=0, receiver_height=RECEIVER_HEIGHT_M):
     return min(F, 1.0)
 
 
-def transmissivity(x, humidity_pct=50):
+def transmissivity(x, humidity_pct=50, ambient_temp_c=20):
     """
     Atmospheric transmissivity over a path length x, dimensionless [0, 1].
+    Uses the Wayne correlation, relating transmissivity to the water-vapour
+    partial pressure integrated over the path length. Water vapour is the
+    dominant absorber of thermal infrared radiation over the distances this
+    model operates at; CO2 absorption is a secondary effect and is not
+    modelled separately here, consistent with this project's existing
+    practice of disclosed, defensible simplification (see the Kinney-Graham
+    choice in blast_model.py for the same philosophy applied elsewhere).
 
     Args:
-        x:            path length from flame surface to receiver, m
-        humidity_pct: accepted for interface stability; this correlation is
-                      the humidity-averaged form and does not use it.
+        x: path length from flame surface to receiver, m
+        humidity_pct: relative humidity, percent [0, 100]
+        ambient_temp_c: ambient temperature, deg C. Defaults to 20 (a
+                         reasonable general-purpose ambient) since this field
+                         is not yet part of the request schema.
     """
     if x <= 0:
         return 1.0
 
-    return max(0.0, min(1.0, 1 - 0.058 * math.log(x)))
+    T = ambient_temp_c
+    p_sat = 610.94 * math.exp((17.625 * T) / (T + 243.04))
+    p_w = (humidity_pct / 100.0) * p_sat
+
+    if p_w <= 0:
+        return 1.0
+
+    tau = 2.02 * (p_w * x) ** (-0.09)
+    return max(0.0, min(1.0, tau))
 
 
 def thermal_flux(x, substance_key, tank_diameter_m, wind_speed_ms=0, humidity_pct=50):
