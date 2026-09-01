@@ -1,0 +1,22 @@
+# Secrets -- never commit real environment values. .env.example is the
+# documented template and IS tracked; .env itself must never be.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+.pytest_cache/
+
+# Local database file (regenerated on startup)
+*.db
+
+# Node
+node_modules/
+dist/
+
+# OS
+.DS_Store

@@ -1,5 +1,8 @@
-fastapi
-uvicorn
-sqlalchemy
-pymysql
-python-dotenv
+# Exact pins, taken from the working environment. Pinned rather than
+# ranged so the demo runs against the versions it was tested against.
+fastapi==0.141.1
+uvicorn==0.52.4
+sqlalchemy==2.0.52
+pymysql==1.2.0
+python-dotenv==1.2.3
+pytest==9.1.1

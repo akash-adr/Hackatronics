@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { fetchComputeZone, fetchConfigSchema } from '../api/zones';
+import { CACHED_FALLBACK_RESULTS } from '../data/fallbackResults';
 import { angleDiff } from '../utils/compass';
 import {
   CONFIG_FIELDS,
@@ -154,10 +155,22 @@ const useFacilityStore = create((set, get) => ({
   // always tell whether the numbers on screen match the current inputs.
   isLive: true,
 
-  // Set when a request fails. The last successful zoneData is deliberately
-  // KEPT so the dashboard degrades to "showing older data" rather than
-  // blanking out mid-demo.
-  connectionIssue: null,
+  // Two DISTINCT failure states, because they mean different things.
+  //
+  // fallbackPreset: a live call failed but the active configuration is a
+  // preset, so its cached answer was served instead. The demo is still
+  // correct, just not live -- this gets a calm, muted notice.
+  //
+  // hardFailure: a live call failed for a hand-edited configuration, which
+  // has no cached answer. Genuinely unrecoverable, and it looks like it.
+  //
+  // Neither auto-hides; both are dismissed explicitly, for the same reason
+  // the what-changed alert is (a notice that vanishes can be missed).
+  fallbackPreset: null,
+  hardFailure: null,
+
+  dismissFallbackNotice: () => set({ fallbackPreset: null }),
+  dismissHardFailure: () => set({ hardFailure: null }),
 
   // Non-null while an unacknowledged significant change is outstanding. Only
   // ever replaced, never stacked: a second change before the first is
@@ -201,17 +214,51 @@ const useFacilityStore = create((set, get) => ({
     // Displayed data no longer reflects the current inputs until this lands.
     set({ loading: true, isLive: false, error: null });
 
+    // Captured before the await: the preset the user is looking at now is the
+    // one whose cached answer is valid if this call fails.
+    const presetAtRequestTime = get().activePreset;
+
+    let data;
+    let servedFromCache = false;
+
     try {
-      const data = await fetchComputeZone({
+      data = await fetchComputeZone({
         ...config,
         hazard_type: 'both',
         center_lat: FACILITY_CENTER.lat,
         center_lon: FACILITY_CENTER.lng,
       });
-
-      // Stale response from a superseded click: drop it silently.
+    } catch (err) {
+      // A superseded request failing is not news -- stay silent and let the
+      // newer one own the outcome.
       if (id !== latestRequestId) return;
 
+      console.warn('Live compute failed, falling back:', err);
+
+      const cached =
+        presetAtRequestTime && CACHED_FALLBACK_RESULTS[presetAtRequestTime];
+
+      if (!cached) {
+        // No cached answer for a hand-edited configuration. This is the one
+        // genuinely unrecoverable case: fail visibly rather than pretending.
+        set({
+          loading: false,
+          isLive: false,
+          error: err.message,
+          hardFailure:
+            'Connection issue — unable to compute this configuration right now. Try a preset or check your connection.',
+        });
+        return;
+      }
+
+      data = cached;
+      servedFromCache = true;
+    }
+
+    // Stale response from a superseded click: drop it silently.
+    if (id !== latestRequestId) return;
+
+    try {
       // Only the latest accepted response reaches this point, so the check
       // never runs against a superseded result.
       const change = checkForSignificantChange(data.safe_approach);
@@ -220,8 +267,10 @@ const useFacilityStore = create((set, get) => ({
       set((state) => ({
         zoneData: data,
         loading: false,
-        isLive: true,
-        connectionIssue: null,
+        // Cached data is real and correct, but it is not live.
+        isLive: !servedFromCache,
+        hardFailure: null,
+        fallbackPreset: servedFromCache ? presetAtRequestTime : null,
         // Replace rather than stack; keep any existing unacknowledged alert.
         changeAlert: change.changed
           ? {
@@ -235,17 +284,9 @@ const useFacilityStore = create((set, get) => ({
           : state.results,
       }));
     } catch (err) {
-      // A superseded request failing is not news -- stay silent.
+      // Reached only if processing an already-received response throws.
       if (id !== latestRequestId) return;
-
-      // Retain the last successful zoneData. The screen keeps showing the
-      // previous good answer, flagged as no longer live, instead of clearing.
-      set({
-        loading: false,
-        isLive: false,
-        error: err.message,
-        connectionIssue: 'Using last known data — connection issue.',
-      });
+      set({ loading: false, isLive: false, error: err.message });
     }
   },
 
@@ -346,14 +387,21 @@ const useFacilityStore = create((set, get) => ({
         zoneData: untouched ? resultA : state.zoneData,
         loading: false,
         isLive: true,
-        connectionIssue: null,
+        fallbackPreset: null,
+        hardFailure: null,
       }));
     } catch (err) {
+      // Startup pre-compute failed: seed from the cached presets so the
+      // dashboard opens fully populated rather than empty.
+      console.warn('Startup pre-compute failed, seeding from cache:', err);
+      checkForSignificantChange(CACHED_FALLBACK_RESULTS.configA.safe_approach);
       set({
+        results: { ...CACHED_FALLBACK_RESULTS },
+        zoneData: CACHED_FALLBACK_RESULTS.configA,
         loading: false,
         isLive: false,
         error: err.message,
-        connectionIssue: 'Using last known data — connection issue.',
+        fallbackPreset: 'configA',
       });
     }
   },

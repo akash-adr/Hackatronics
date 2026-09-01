@@ -1,33 +1,38 @@
 """
 Threat-zone computation endpoint.
 
-This layer only translates HTTP to the engines and back: parse the body,
+This layer only translates HTTP to the engines and back: rate-limit, parse,
 normalise the wind bearing, validate, delegate. No physics and no geometry is
 done here, and nothing is persisted.
 
 Module 2 deliberately has no endpoint of its own -- it extends this same
 response, so the frontend makes one call and receives fully-processed zones
 with polygons already attached.
+
+Every input check goes through backend/validation.py, which is the single
+place the API's validation surface is defined.
 """
 
-from fastapi import APIRouter
+import logging
+
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from geometry.engine import compute_warped_zones
-from physics.engine import HAZARD_TYPES, compute_zone, normalize_wind_dir, validate_inputs
+from physics.engine import compute_zone
+from rate_limiter import check_rate_limit
 from safe_approach.engine import compute_safe_approach_for_response
+from validation import (
+    HAZARD_TYPES,
+    validate_facility_coordinates,
+    validate_inputs,
+    validate_wind_direction,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Coordinate bounds are checked here rather than inside Module 1's
-# validate_inputs(). Module 1 is frozen, and its validator covers the physics
-# inputs only -- latitude and longitude are map concerns introduced by Module
-# 2, so they are validated at the boundary that introduces them. The errors
-# they produce are appended to the same list and returned in the same 400
-# shape, so callers see one consistent error contract.
-MIN_LAT, MAX_LAT = -90, 90
-MIN_LON, MAX_LON = -180, 180
 
 
 class ComputeZoneRequest(BaseModel):
@@ -47,58 +52,68 @@ class ComputeZoneRequest(BaseModel):
 
 
 @router.post("/api/compute-zone")
-def compute_zone_endpoint(request: ComputeZoneRequest):
+def compute_zone_endpoint(payload: ComputeZoneRequest, request: Request):
     """
     Compute wind-warped thermal and/or blast threat zones for a scenario.
 
-    Returns 400 with {"errors": [...]} if any input is out of range, and the
-    fully-warped Module 2 result otherwise.
+    Returns 429 when the caller is over its request budget, 400 with
+    {"errors": [...]} if any input is out of range, and the fully-warped
+    Module 2 + 3 result otherwise.
     """
-    # A bearing is always valid, just possibly unwrapped. Normalised here so
-    # every downstream consumer sees a value in [0, 360).
-    wind_dir_deg = normalize_wind_dir(request.wind_dir_deg)
+    # Rate limit FIRST: a client that is over budget costs nothing beyond this
+    # check -- no parsing, no validation, no computation.
+    client_id = request.client.host if request.client else "unknown"
+    if not check_rate_limit(client_id):
+        logger.warning("Rate limit exceeded on /api/compute-zone by %s", client_id)
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Too many requests -- please slow down."},
+        )
+
+    # A bearing is always valid, just possibly unwrapped. Normalised exactly
+    # once, here at the boundary, so everything downstream sees [0, 360).
+    wind_dir_deg = validate_wind_direction(payload.wind_dir_deg)
 
     errors = validate_inputs(
-        request.substance,
-        request.tank_volume_m3,
-        request.tank_diameter_m,
-        request.wind_speed_kmh,
-        request.humidity_pct,
+        payload.substance,
+        payload.tank_volume_m3,
+        payload.tank_diameter_m,
+        payload.wind_speed_kmh,
+        payload.humidity_pct,
     )
 
     # hazard_type is not part of validate_inputs' contract, but an unrecognised
     # value would otherwise yield a result with neither hazard section -- a
     # silently empty answer. Reported alongside the other input errors.
-    if request.hazard_type not in HAZARD_TYPES:
+    if payload.hazard_type not in HAZARD_TYPES:
         errors.append(
             f"hazard_type must be one of: {', '.join(HAZARD_TYPES)}, "
-            f"got '{request.hazard_type}'."
+            f"got '{payload.hazard_type}'."
         )
 
-    if not MIN_LAT <= request.center_lat <= MAX_LAT:
-        errors.append(
-            f"center_lat must be between {MIN_LAT} and {MAX_LAT}, "
-            f"got {request.center_lat}."
-        )
-
-    if not MIN_LON <= request.center_lon <= MAX_LON:
-        errors.append(
-            f"center_lon must be between {MIN_LON} and {MAX_LON}, "
-            f"got {request.center_lon}."
-        )
+    # Coordinates are checked before they reach Module 2's polygon builder.
+    errors.extend(validate_facility_coordinates(payload.center_lat, payload.center_lon))
 
     if errors:
+        # Log the endpoint and the identifying inputs needed to reproduce the
+        # failure -- deliberately NOT the whole request body.
+        logger.info(
+            "Rejected /api/compute-zone: substance=%s hazard_type=%s errors=%s",
+            payload.substance,
+            payload.hazard_type,
+            errors,
+        )
         # Never hand invalid input to the engines.
         return JSONResponse(status_code=400, content={"errors": errors})
 
     # Module 1: how far does each severity threshold reach, with no wind.
     zones = compute_zone(
-        request.substance,
-        request.tank_volume_m3,
-        request.tank_diameter_m,
-        request.wind_speed_kmh,
-        request.humidity_pct,
-        request.hazard_type,
+        payload.substance,
+        payload.tank_volume_m3,
+        payload.tank_diameter_m,
+        payload.wind_speed_kmh,
+        payload.humidity_pct,
+        payload.hazard_type,
     )
 
     # Module 2: which direction is worse. Purely geometric -- no physics is
@@ -107,9 +122,9 @@ def compute_zone_endpoint(request: ComputeZoneRequest):
     warped = compute_warped_zones(
         zones,
         wind_from_deg=wind_dir_deg,
-        wind_speed_kmh=request.wind_speed_kmh,
-        center_lat=request.center_lat,
-        center_lon=request.center_lon,
+        wind_speed_kmh=payload.wind_speed_kmh,
+        center_lat=payload.center_lat,
+        center_lon=payload.center_lon,
     )
 
     # Module 3: where to approach from, derived from the per-angle radii

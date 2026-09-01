@@ -18,7 +18,6 @@ const Divider = () => (
 const IncidentSummaryStrip = () => {
   const zoneData = useFacilityStore((s) => s.zoneData);
   const facilityConfig = useFacilityStore((s) => s.facilityConfig);
-  const connectionIssue = useFacilityStore((s) => s.connectionIssue);
 
   const fatal = fatalRadiusM(zoneData);
   const safe = zoneData?.safe_approach;
@@ -55,13 +54,6 @@ const IncidentSummaryStrip = () => {
       ) : (
         <span className="text-body text-subtle">
           Safe approach: <span className="text-ink">could not be determined</span>
-        </span>
-      )}
-
-      {/* Neutral chrome: orange means "serious/structural band" on the map. */}
-      {connectionIssue && (
-        <span className="ml-auto rounded-card border border-line bg-surface-muted px-2.5 py-1 text-meta font-medium text-ink">
-          {connectionIssue}
         </span>
       )}
     </footer>

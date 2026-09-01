@@ -7,6 +7,10 @@ import IncidentSummaryStrip from './components/Dashboard/IncidentSummaryStrip';
 import ExplainabilityPanel from './components/Dashboard/ExplainabilityPanel';
 import TopStatusBar from './components/Dashboard/TopStatusBar';
 import ChangeAlertBanner from './components/Dashboard/ChangeAlertBanner';
+import {
+  FallbackNotice,
+  HardFailureNotice,
+} from './components/Dashboard/ResilienceNotices';
 import FacilitySelector from './components/ConfigPanel/FacilitySelector';
 import CustomFacilityForm from './components/ConfigPanel/CustomFacilityForm';
 import ComparisonView from './components/ConfigPanel/ComparisonView';
@@ -56,6 +60,8 @@ function App() {
           require scrolling to reach. */}
       <div className="hidden h-screen w-screen flex-col overflow-hidden bg-canvas font-sans text-ink min-[1280px]:flex">
         <TopStatusBar />
+        <HardFailureNotice />
+        <FallbackNotice />
         <ChangeAlertBanner />
 
         <main className="flex min-h-0 flex-1 gap-4 p-4">

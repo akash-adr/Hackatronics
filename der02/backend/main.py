@@ -7,16 +7,21 @@ from api.routes_config import router as config_router
 
 app = FastAPI(title="DER-02 Backend")
 
-# Setup CORS
-origins = [
-    "http://localhost:5173", # Vite dev server default
+# CORS: an explicit allow-list, never a wildcard. The dev frontend proxies
+# /api through Vite, so it is same-origin in practice; this list covers direct
+# browser access to the backend during development.
+# allow_credentials is off: the API is stateless and uses no cookies or auth
+# headers, so there is nothing to send.
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",  # Vite dev server default
+    "http://localhost:5174",  # Vite's fallback when 5173 is taken
+    "http://localhost:3000",  # common alternative dev port
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
