@@ -51,3 +51,48 @@ def validate_facility_coordinates(lat, lon):
         errors.append(f"Longitude must be between {MIN_LONGITUDE} and {MAX_LONGITUDE}")
 
     return errors
+
+
+# ---------------------------------------------------------------------------
+# Second-facility placement (multi-tank escalation feature).
+# ---------------------------------------------------------------------------
+
+# Minimum separation before a containment check is meaningful. Two facilities
+# at the same coordinate is a placement error, not a scenario.
+MIN_FACILITY_SEPARATION_M = 5
+
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """
+    Great-circle distance in metres.
+
+    No production haversine existed in the codebase before this (only test
+    helpers in geometry/tests and safe_approach/tests), so it is defined once
+    here, beside the validator that needs it.
+    """
+    import math
+
+    R = 6371000  # Earth radius in metres
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dphi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    )
+    return 2 * R * math.asin(math.sqrt(a))
+
+
+def validate_second_facility_placement(
+    lat1, lon1, lat2, lon2, min_separation_m=MIN_FACILITY_SEPARATION_M
+):
+    """
+    Prevents a degenerate, zero-distance placement from reaching the domino-detection
+    geometry check -- if the second facility is placed essentially on top of the first,
+    reject it rather than computing a meaningless containment check.
+    """
+    distance = haversine_distance(lat1, lon1, lat2, lon2)
+
+    if distance < min_separation_m:
+        return [f"Second facility must be at least {min_separation_m}m from the first"]
+    return []

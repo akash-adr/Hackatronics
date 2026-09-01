@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import HazardMap from './components/Map/HazardMap';
+import DualHazardMap from './components/Map/DualHazardMap';
 import MapOverlays from './components/Map/MapOverlays';
 import SeverityLegend from './components/Dashboard/SeverityLegend';
 import KeyFigures from './components/Dashboard/KeyFigures';
@@ -7,6 +8,7 @@ import IncidentSummaryStrip from './components/Dashboard/IncidentSummaryStrip';
 import ExplainabilityPanel from './components/Dashboard/ExplainabilityPanel';
 import TopStatusBar from './components/Dashboard/TopStatusBar';
 import ChangeAlertBanner from './components/Dashboard/ChangeAlertBanner';
+import CrossExposureBanner from './components/Dashboard/CrossExposureBanner';
 import {
   FallbackNotice,
   HardFailureNotice,
@@ -14,6 +16,7 @@ import {
 import FacilitySelector from './components/ConfigPanel/FacilitySelector';
 import CustomFacilityForm from './components/ConfigPanel/CustomFacilityForm';
 import ComparisonView from './components/ConfigPanel/ComparisonView';
+import SecondFacilityPanel from './components/ConfigPanel/SecondFacilityPanel';
 import SectionLabel from './components/ui/SectionLabel';
 import Card from './components/ui/Card';
 import useFacilityStore from './store/useFacilityStore';
@@ -43,6 +46,7 @@ function WidenWindowNotice() {
 function App() {
   const initialize = useFacilityStore((s) => s.initialize);
   const schemaError = useFacilityStore((s) => s.schemaError);
+  const secondFacilityEnabled = useFacilityStore((s) => s.secondFacilityEnabled);
 
   useEffect(() => {
     // Fetches the config schema, then pre-computes BOTH presets in the
@@ -63,6 +67,7 @@ function App() {
         <HardFailureNotice />
         <FallbackNotice />
         <ChangeAlertBanner />
+        {secondFacilityEnabled && <CrossExposureBanner />}
 
         <main className="flex min-h-0 flex-1 gap-4 p-4">
           {/* LEFT -- Module 4 input panel.
@@ -87,6 +92,8 @@ function App() {
 
             <ComparisonView />
 
+            <SecondFacilityPanel />
+
             {/* Neutral, not hazard-red: red means "fatal band" on this
                 screen and nothing else. */}
             {schemaError && (
@@ -99,7 +106,7 @@ function App() {
           {/* CENTRE -- Module 3 map. flex-1 between two 25%-capped panels
               guarantees at least 50% of the width. */}
           <section className="relative min-w-0 flex-1 overflow-hidden rounded-viewport bg-viewport shadow-viewport ring-1 ring-line">
-            <HazardMap />
+            {secondFacilityEnabled ? <DualHazardMap /> : <HazardMap />}
             <MapOverlays />
           </section>
 

@@ -26,3 +26,39 @@ export const fetchComputeZone = async (config, { signal } = {}) => {
   });
   return response.data;
 };
+
+/**
+ * Multi-tank escalation check.
+ *
+ * Sends the primary facility's ALREADY-COMPUTED result rather than any
+ * parameters, so the backend re-runs no physics -- it only tests containment
+ * against polygons this client already holds.
+ */
+export const checkEscalation = async ({
+  primaryResult,
+  primaryLat,
+  primaryLon,
+  secondLat,
+  secondLon,
+}) => {
+  const response = await apiClient.post('/api/check-escalation', {
+    primary_result: primaryResult,
+    primary_lat: primaryLat,
+    primary_lon: primaryLon,
+    second_lat: secondLat,
+    second_lon: secondLon,
+  });
+  return response.data;
+};
+
+/**
+ * Dual-facility compute. Same contract as fetchComputeZone: same timeout,
+ * throws on timeout or any non-2xx so the caller owns the failure path.
+ */
+export const fetchComputeZoneDual = async (payload, { signal } = {}) => {
+  const response = await apiClient.post('/api/compute-zone-dual', payload, {
+    signal,
+    timeout: COMPUTE_TIMEOUT_MS,
+  });
+  return response.data;
+};

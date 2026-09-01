@@ -14,7 +14,11 @@ import pytest
 
 from main import ALLOWED_ORIGINS
 from rate_limiter import RATE_LIMIT_PER_SECOND, WINDOW_SECONDS, check_rate_limit
-from validation import validate_facility_coordinates, validate_wind_direction
+from validation import (
+    validate_facility_coordinates,
+    validate_second_facility_placement,
+    validate_wind_direction,
+)
 
 BACKEND_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -157,3 +161,16 @@ def test_env_example_contains_no_real_looking_values():
         _, _, value = line.partition("=")
         # A template must not carry anything long enough to be a real secret.
         assert len(value.strip()) < 20, f"suspiciously long value in .env.example: {line}"
+
+
+# --- second-facility placement (multi-tank escalation feature) ------------
+
+
+def test_second_facility_zero_distance_rejected():
+    errors = validate_second_facility_placement(13.0, 80.2, 13.0, 80.2)
+    assert len(errors) > 0
+
+
+def test_second_facility_sufficient_distance_accepted():
+    errors = validate_second_facility_placement(13.0, 80.2, 13.01, 80.21)
+    assert len(errors) == 0

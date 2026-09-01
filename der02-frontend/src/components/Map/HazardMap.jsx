@@ -8,6 +8,8 @@ import FacilityMarker from './FacilityMarker';
 import WindArrow from './WindArrow';
 import HazardZoneLayer from './HazardZoneLayer';
 import SafeApproachWedge from './SafeApproachWedge';
+import SecondFacilityLayer from './SecondFacilityLayer';
+import EscalationPanel from './EscalationPanel';
 
 // Fix for default marker icons in Vite
 import icon from 'leaflet/dist/images/marker-icon.png';
@@ -245,9 +247,12 @@ const HazardMap = () => {
           centerLon={facilityConfig.lng}
         />
 
+        <SecondFacilityLayer />
         <FacilityMarker />
         <WindArrow />
       </MapContainer>
+
+      <EscalationPanel />
     </div>
   );
 };

@@ -1,5 +1,10 @@
 import { create } from 'zustand';
-import { fetchComputeZone, fetchConfigSchema } from '../api/zones';
+import {
+  checkEscalation,
+  fetchComputeZone,
+  fetchComputeZoneDual,
+  fetchConfigSchema,
+} from '../api/zones';
 import { CACHED_FALLBACK_RESULTS } from '../data/fallbackResults';
 import { angleDiff } from '../utils/compass';
 import {
@@ -26,6 +31,7 @@ const SLIDER_DEBOUNCE_MS = 120;
 let requestCounter = 0;
 let latestRequestId = 0;
 let debounceTimer = null;
+let dualDebounceTimer = null;
 
 // initialize() is idempotent. React StrictMode invokes mount effects twice
 // in development, and without this guard the startup pre-compute would
@@ -169,6 +175,17 @@ const useFacilityStore = create((set, get) => ({
   fallbackPreset: null,
   hardFailure: null,
 
+  // --- second facility & combined threat assessment (additive) ---
+  secondFacilityEnabled: false,
+  secondFacilityConfig: null, // { substance, tank_volume_m3, tank_diameter_m, lat, lng }
+  dualZoneData: null, // full /api/compute-zone-dual response
+
+  // --- multi-tank escalation (additive; touches nothing above) ---
+  placingSecondFacility: false,
+  secondFacility: null, // { lat, lon } once placed
+  escalation: null, // the backend's result object
+  escalationError: null, // validation or network message
+
   dismissFallbackNotice: () => set({ fallbackPreset: null }),
   dismissHardFailure: () => set({ hardFailure: null }),
 
@@ -283,6 +300,13 @@ const useFacilityStore = create((set, get) => ({
           ? { ...state.results, [preset]: data }
           : state.results,
       }));
+
+      // A second facility, if placed, is re-checked against the new zones.
+      // This rides the existing debounced recompute rather than adding a
+      // parallel update path.
+      if (get().secondFacility) get().recheckEscalation();
+      // Keep the dual view in step with primary-facility changes.
+      if (get().secondFacilityEnabled) get().recomputeDual();
     } catch (err) {
       // Reached only if processing an already-received response throws.
       if (id !== latestRequestId) return;
@@ -345,6 +369,159 @@ const useFacilityStore = create((set, get) => ({
       get().recompute();
     } else {
       debounceTimer = setTimeout(() => get().recompute(), SLIDER_DEBOUNCE_MS);
+    }
+  },
+
+  togglePlacementMode: () =>
+    set((state) => ({
+      placingSecondFacility: !state.placingSecondFacility,
+      escalationError: null,
+    })),
+
+  clearSecondFacility: () =>
+    set({
+      secondFacility: null,
+      escalation: null,
+      escalationError: null,
+      placingSecondFacility: false,
+    }),
+
+  /**
+   * Place the second facility and run the containment check.
+   * On a validation rejection (e.g. too close) NO marker is placed.
+   */
+  placeSecondFacility: async (lat, lon) => {
+    const { zoneData } = get();
+    if (!zoneData) return;
+
+    try {
+      const result = await checkEscalation({
+        primaryResult: zoneData,
+        primaryLat: FACILITY_CENTER.lat,
+        primaryLon: FACILITY_CENTER.lng,
+        secondLat: lat,
+        secondLon: lon,
+      });
+      set({
+        secondFacility: { lat, lon },
+        escalation: result,
+        escalationError: null,
+        placingSecondFacility: false,
+      });
+    } catch (err) {
+      // A 400 carries the backend's validation messages; anything else is a
+      // network/server problem. Either way no marker is placed.
+      const errors = err?.response?.data?.errors;
+      set({
+        escalationError: errors
+          ? errors.join(' ')
+          : 'Could not check escalation risk — connection issue.',
+        placingSecondFacility: false,
+      });
+    }
+  },
+
+  /**
+   * Re-run the check against freshly recomputed primary zones. Called from
+   * recompute()'s success path, so it inherits the existing debounce and
+   * stale-response discarding rather than adding a second mechanism.
+   */
+  recheckEscalation: async () => {
+    const { secondFacility, zoneData } = get();
+    if (!secondFacility || !zoneData) return;
+
+    try {
+      const result = await checkEscalation({
+        primaryResult: zoneData,
+        primaryLat: FACILITY_CENTER.lat,
+        primaryLon: FACILITY_CENTER.lng,
+        secondLat: secondFacility.lat,
+        secondLon: secondFacility.lon,
+      });
+      set({ escalation: result, escalationError: null });
+    } catch {
+      set({ escalationError: 'Could not refresh escalation risk.' });
+    }
+  },
+
+  enableSecondFacility: (initialConfig) => {
+    set({ secondFacilityEnabled: true, secondFacilityConfig: initialConfig });
+    get().recomputeDual();
+  },
+
+  disableSecondFacility: () =>
+    set({
+      secondFacilityEnabled: false,
+      secondFacilityConfig: null,
+      dualZoneData: null,
+    }),
+
+  /**
+   * Update one of facility B's own fields and recompute.
+   * Debounced on its own timer so B's edits never cancel a pending primary
+   * recompute, and vice versa.
+   */
+  setSecondFacilityField: (field, value) => {
+    const current = get().secondFacilityConfig;
+    if (!current) return;
+
+    // Same clamping the primary panel uses, so facility B can never send a
+    // value the backend would reject either. Coordinates clamp to their own
+    // valid ranges rather than to a schema bound, which covers only the
+    // facility fields.
+    let next;
+    if (field === 'substance') {
+      next = value;
+    } else if (field === 'lat') {
+      next = Math.min(Math.max(Number(value), -90), 90);
+    } else if (field === 'lng') {
+      next = Math.min(Math.max(Number(value), -180), 180);
+    } else {
+      next = coerceField(field, Number(value), get().schema?.bounds);
+    }
+
+    const updated = { ...current, [field]: next };
+    set({ secondFacilityConfig: updated });
+
+    // Mid-edit an input can be empty (NaN). Keep it editable, but hold the
+    // last good zone on screen instead of firing a request that would 400.
+    const complete = ['tank_volume_m3', 'tank_diameter_m', 'lat', 'lng'].every((f) =>
+      Number.isFinite(updated[f])
+    );
+    if (!complete) return;
+
+    if (dualDebounceTimer) clearTimeout(dualDebounceTimer);
+    dualDebounceTimer = setTimeout(() => get().recomputeDual(), SLIDER_DEBOUNCE_MS);
+  },
+
+  recomputeDual: async () => {
+    const { config, secondFacilityConfig } = get();
+    if (!secondFacilityConfig) return;
+    set({ loading: true, isLive: false });
+    try {
+      const data = await fetchComputeZoneDual({
+        facility_a: {
+          substance: config.substance,
+          tank_volume_m3: config.tank_volume_m3,
+          tank_diameter_m: config.tank_diameter_m,
+          center_lat: FACILITY_CENTER.lat,
+          center_lon: FACILITY_CENTER.lng,
+        },
+        facility_b: {
+          substance: secondFacilityConfig.substance,
+          tank_volume_m3: secondFacilityConfig.tank_volume_m3,
+          tank_diameter_m: secondFacilityConfig.tank_diameter_m,
+          center_lat: secondFacilityConfig.lat,
+          center_lon: secondFacilityConfig.lng,
+        },
+        wind_speed_kmh: config.wind_speed_kmh,
+        wind_dir_deg: config.wind_dir_deg,
+        humidity_pct: config.humidity_pct,
+        hazard_type: 'both',
+      });
+      set({ dualZoneData: data, loading: false, isLive: true });
+    } catch (err) {
+      set({ loading: false, isLive: false, error: err.message });
     }
   },
 
