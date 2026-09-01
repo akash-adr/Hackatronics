@@ -1,6 +1,7 @@
 import React from 'react';
 import useFacilityStore from '../../store/useFacilityStore';
 import {
+  bandConsequence,
   bandRadius,
   bandThresholdText,
   severityColor,
@@ -28,8 +29,9 @@ import SectionLabel from '../ui/SectionLabel';
  * the prominent figure, because the radius is the number that actually
  * changes between configurations.
  */
-const LegendRow = ({ band }) => {
+const LegendRow = ({ band, hazardType }) => {
   const radius = bandRadius(band);
+  const consequence = bandConsequence(band.label, hazardType);
 
   return (
     <div className="flex items-center justify-between gap-3 py-2 first:pt-0 last:pb-0">
@@ -42,8 +44,13 @@ const LegendRow = ({ band }) => {
           <p className="truncate text-body text-ink">
             {severityLabel(band.label)}
           </p>
-          {/* The fixed physical constant defining this band. */}
-          <p className="text-meta text-subtle tnum">{bandThresholdText(band)}</p>
+          {/* The fixed physical constant, plus what it means in practice. */}
+          <p className="text-meta text-subtle tnum">
+            {bandThresholdText(band)}
+            {consequence && (
+              <span className="ml-1.5 not-italic">— {consequence}</span>
+            )}
+          </p>
         </div>
       </div>
 
@@ -67,7 +74,7 @@ const LegendRow = ({ band }) => {
   );
 };
 
-const HazardGroup = ({ title, hint, bands }) => {
+const HazardGroup = ({ title, hint, bands, hazardType }) => {
   if (!bands?.length) return null;
 
   return (
@@ -78,7 +85,7 @@ const HazardGroup = ({ title, hint, bands }) => {
       </div>
       <div className="mt-1 flex flex-col divide-y divide-line">
         {bands.map((band) => (
-          <LegendRow key={band.label} band={band} />
+          <LegendRow key={band.label} band={band} hazardType={hazardType} />
         ))}
       </div>
     </div>
@@ -94,13 +101,15 @@ const SeverityLegend = () => {
     <Card>
       <SectionLabel>Severity bands</SectionLabel>
       <HazardGroup
-        title="Thermal"
+        title="Thermal radiation (kW/m²)"
         hint="filled"
+        hazardType="thermal"
         bands={zoneData.thermal?.bands}
       />
       <HazardGroup
-        title="Blast"
+        title="Blast overpressure (psi)"
         hint="dashed outline"
+        hazardType="blast"
         bands={zoneData.blast?.bands}
       />
     </Card>

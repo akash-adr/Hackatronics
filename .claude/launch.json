@@ -8,7 +8,9 @@
         "--prefix",
         "der02-frontend",
         "run",
-        "dev"
+        "dev",
+        "--",
+        "--force"
       ],
       "port": 5173,
       "autoPort": true

@@ -69,18 +69,4 @@ body {
   accent-color: #4f46e5;
 }
 
-/* Esri's dark canvas is lighter than CARTO Dark Matter. Darkening only the
-   tile pane deepens the basemap while leaving hazard polygons, markers and
-   overlays (separate panes) at full vividness. */
-.leaflet-tile-pane {
-  filter: brightness(0.62) saturate(0.85) contrast(1.08);
-}
 
-/* Fallback basemap: OpenStreetMap's standard tiles are light, which would
-   break the dark-viewport-inside-light-shell contrast the whole layout is
-   built on. Inverting and rotating the hue renders them dark without needing
-   a second dark-tile provider, so a tile outage degrades the basemap's
-   detail but not the design. */
-.der-tiles-fallback .leaflet-tile-pane {
-  filter: invert(1) hue-rotate(180deg) brightness(0.95) saturate(0.55) contrast(0.9);
-}

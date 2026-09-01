@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Map as MapIcon, Satellite } from 'lucide-react';
 import { MapContainer, TileLayer, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -33,24 +34,99 @@ const ResizeHandler = () => {
   return null;
 };
 
-// Primary: Esri Dark Gray Canvas -- keyless, and dark to match the viewport.
-// Fallback: standard OpenStreetMap -- keyless, and about as reliable as free
-// tiles get. It is lighter than the primary, but index.css darkens the tile
-// pane, so the switch stays visually coherent.
-const TILE_SOURCES = [
-  {
+// Two user-selectable basemaps, both keyless.
+//
+// NOTE ON DARK: CartoDB Dark Matter is NOT usable -- its tiles now come back
+// stamped "API KEY REQUIRED / carto.com/basemaps/apikey" (HTTP 200, so it
+// fails silently rather than erroring). Esri's Dark Gray Canvas is the
+// keyless equivalent and is what this project used before the satellite swap.
+const BASEMAPS = {
+  light: {
+    name: 'Esri World Imagery',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    maxZoom: 19,
+    attribution: 'Esri, Maxar, Earthstar Geographics',
+  },
+  dark: {
     name: 'Esri Dark Gray Canvas',
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
     maxZoom: 16,
     attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ',
   },
-  {
-    name: 'OpenStreetMap',
-    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  },
-];
+};
+
+// Used only when the selected basemap's provider fails (Module 7). Not a
+// user-facing choice.
+const FALLBACK_TILES = {
+  name: 'OpenStreetMap',
+  url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+};
+
+/**
+ * Fit the view to the current configuration's outermost hazard band.
+ *
+ * A fixed zoom cannot serve both presets: Config A's blast bands reach ~870 m
+ * while Config B's pass 2 km, so any single level renders one of them as
+ * specks. Fitting to the data keeps the zones readable at either scale.
+ *
+ * WHAT RETRIGGERS IT: only changes that actually resize the zones -- the
+ * preset, substance, tank volume and tank diameter. Wind speed, direction and
+ * humidity are deliberately excluded: they reshape the polygon without
+ * changing its scale, and re-fitting on every slider tick would make the map
+ * lurch while a judge is dragging.
+ */
+const FitToHazardBounds = ({ zoneData }) => {
+  const map = useMap();
+  const config = useFacilityStore((s) => s.config);
+  const activePreset = useFacilityStore((s) => s.activePreset);
+  const lastFitKeyRef = useRef(null);
+
+  // Only the size-affecting inputs appear in this key.
+  const fitKey = [
+    activePreset ?? 'custom',
+    config.substance,
+    config.tank_volume_m3,
+    config.tank_diameter_m,
+  ].join('|');
+
+  useEffect(() => {
+    if (!zoneData) return;
+    if (lastFitKeyRef.current === fitKey) return;
+
+    // Fit to the outermost THERMAL band, not the outermost band overall.
+    //
+    // Blast reaches 234-870 m while thermal spans only 7.8-35.9 m, so framing
+    // the blast extent squeezes all three thermal bands into 16/7/2 px --
+    // leaving visible rings just 4.5, 2.5 and 1 px wide, thinner than their
+    // own 1.5 px strokes. They are filled correctly, but far too thin to read
+    // as filled. Framing thermal instead makes all three legible; the blast
+    // rings extend past the viewport, and are outline-only anyway, with their
+    // radii stated numerically in the legend.
+    const preferred = zoneData.thermal?.bands?.length
+      ? zoneData.thermal.bands
+      : (zoneData.blast?.bands ?? []);
+
+    const outer = preferred.reduce(
+      (best, b) => {
+        const r = b.radius_no_wind_m ?? b.radius_m ?? 0;
+        return r > best.r ? { r, band: b } : best;
+      },
+      { r: 0, band: null }
+    ).band;
+
+    if (!outer?.polygon?.length) return;
+
+    lastFitKeyRef.current = fitKey;
+    const bounds = L.latLngBounds(outer.polygon);
+    // pad() expands the bounds by a ratio, giving breathing room without the
+    // zones being pushed to the very edge of the viewport.
+    map.fitBounds(bounds.pad(0.2), { animate: true });
+  }, [fitKey, zoneData, map]);
+
+  return null;
+};
 
 // Component to recenter map when facility changes
 const RecenterAutomatically = ({ lat, lng }) => {
@@ -64,24 +140,34 @@ const RecenterAutomatically = ({ lat, lng }) => {
 const HazardMap = () => {
   const { facilityConfig, zoneData } = useFacilityStore();
 
-  const [tileSourceIndex, setTileSourceIndex] = useState(0);
+  // Pure display preference -- deliberately local state, not in the Zustand
+  // store, because it affects nothing that is computed.
+  const [basemap, setBasemap] = useState('light');
+  const [usingFallback, setUsingFallback] = useState(false);
+
   // A failing provider emits tileerror per tile, so the switch is guarded to
   // fire once rather than once per broken tile.
   const hasFallenBack = useRef(false);
 
-  const tileSource = TILE_SOURCES[tileSourceIndex];
+  const tileSource = usingFallback ? FALLBACK_TILES : BASEMAPS[basemap];
 
   const handleTileError = () => {
-    if (hasFallenBack.current || tileSourceIndex >= TILE_SOURCES.length - 1) {
-      return;
-    }
+    if (hasFallenBack.current || usingFallback) return;
     hasFallenBack.current = true;
     console.warn(
-      `Primary tile source failed (${TILE_SOURCES[tileSourceIndex].name}) -- ` +
-        `switching to ${TILE_SOURCES[tileSourceIndex + 1].name}. ` +
-        `Hazard overlays are unaffected.`
+      `Tile source failed (${tileSource.name}) -- switching to ` +
+        `${FALLBACK_TILES.name}. Hazard overlays are unaffected.`
     );
-    setTileSourceIndex((i) => i + 1);
+    setUsingFallback(true);
+  };
+
+  const selectBasemap = (next) => {
+    if (next === basemap) return;
+    // Give the newly chosen provider a clean chance rather than inheriting a
+    // previous provider's failure.
+    hasFallenBack.current = false;
+    setUsingFallback(false);
+    setBasemap(next);
   };
 
   if (!facilityConfig) {
@@ -94,12 +180,36 @@ const HazardMap = () => {
 
   const center = [facilityConfig.lat, facilityConfig.lng];
 
-  return (
-    <div
-      className={`relative z-0 h-full w-full ${
-        tileSourceIndex > 0 ? 'der-tiles-fallback' : ''
+  const toggleButton = (value, Icon, label) => (
+    <button
+      type="button"
+      onClick={() => selectBasemap(value)}
+      aria-pressed={basemap === value}
+      title={`${label} basemap`}
+      aria-label={`${label} basemap`}
+      className={`flex items-center gap-1 px-2 py-1 text-meta font-medium transition-colors ${
+        basemap === value
+          ? 'bg-viewport-text text-viewport'
+          : 'text-viewport-text hover:bg-white/10'
       }`}
     >
+      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="relative z-0 h-full w-full">
+      {/* Basemap switch. Sits top-right; Leaflet's zoom control is disabled on
+          this map, so there is nothing to collide with.
+          Labels describe what each layer SHOWS ("Satellite View" / "Street
+          View"); the underlying state keys stay 'light' / 'dark', so the tile
+          configs and failover logic are untouched. */}
+      <div className="absolute right-3 top-3 z-[500] flex overflow-hidden rounded-card border border-viewport-hairline bg-viewport-overlay shadow-overlay backdrop-blur-sm">
+        {toggleButton('light', Satellite, 'Satellite View')}
+        {toggleButton('dark', MapIcon, 'Street View')}
+      </div>
+
       <MapContainer center={center} zoom={14} className="h-full w-full" zoomControl={false}>
         {/* Basemap with an automatic fallback provider. The hazard polygons,
             marker and wedge live in Leaflet's overlay pane, which is drawn
@@ -116,6 +226,7 @@ const HazardMap = () => {
 
         <ResizeHandler />
         <RecenterAutomatically lat={facilityConfig.lat} lng={facilityConfig.lng} />
+        <FitToHazardBounds zoneData={zoneData} />
 
         {/* Hazard zones. Blast is drawn before thermal so the small filled
             thermal bands sit above the wide blast outlines. Within each
