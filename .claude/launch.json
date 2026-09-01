@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "der02-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "der02-frontend",
+        "run",
+        "dev"
+      ],
+      "port": 5173,
+      "autoPort": true
+    }
+  ]
+}
