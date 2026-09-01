@@ -1,4 +1,5 @@
 import { angleDiff, degreesToCompass } from './compass';
+import { getFatalRadius } from './hazard';
 
 /**
  * Explanation text generation for the "Why this shape?" panel.
@@ -100,12 +101,8 @@ export function generateComparisonExplanation(
 ) {
   if (!activeState || !otherState) return null;
 
-  const activeFatal = activeState.thermal?.bands?.find(
-    (b) => b.label === 'fatal'
-  )?.radius_no_wind_m;
-  const otherFatal = otherState.thermal?.bands?.find(
-    (b) => b.label === 'fatal'
-  )?.radius_no_wind_m;
+  const activeFatal = getFatalRadius(activeState);
+  const otherFatal = getFatalRadius(otherState);
 
   if (!activeFatal || !otherFatal) return null;
 

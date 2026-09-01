@@ -26,7 +26,7 @@ const Section = ({ title, children }) => (
 );
 
 const ExplainabilityPanel = () => {
-  const zoneData = useFacilityStore((s) => s.zoneData);
+  const zoneData = useFacilityStore((s) => s.getDisplayedZoneData());
   const results = useFacilityStore((s) => s.results);
   const activePreset = useFacilityStore((s) => s.activePreset);
   const [expanded, setExpanded] = useState(false);

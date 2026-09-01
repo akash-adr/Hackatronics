@@ -93,7 +93,7 @@ const HazardGroup = ({ title, hint, bands, hazardType }) => {
 };
 
 const SeverityLegend = () => {
-  const zoneData = useFacilityStore((s) => s.zoneData);
+  const zoneData = useFacilityStore((s) => s.getDisplayedZoneData());
 
   if (!zoneData) return null;
 

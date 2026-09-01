@@ -6,7 +6,7 @@ import useFacilityStore from '../../store/useFacilityStore';
 import { FACILITY_CENTER } from '../../config/presets';
 import FacilityMarker from './FacilityMarker';
 import HazardZoneLayer from './HazardZoneLayer';
-import SafeApproachWedge from './SafeApproachWedge';
+import JointApproachCorridor from './JointApproachCorridor';
 import WindArrow from './WindArrow';
 
 /**
@@ -95,6 +95,34 @@ const DualHazardMap = () => {
     ? [(centerA.lat + centerB.lat) / 2, (centerA.lng + centerB.lng) / 2]
     : [centerA.lat, centerA.lng];
 
+  const jointApproach = dualZoneData?.joint_safe_approach ?? null;
+
+  /**
+   * Each facility's centre and outer thermal reach, which the corridor needs
+   * to keep its inner end clear of both zones. Read from the same response
+   * that drew the polygons, so the two can never disagree.
+   */
+  const facilities = useMemo(() => {
+    if (!dualZoneData || !centerB) return [];
+    // The OUTER thermal band's own per-angle (wind-warped) reach -- the exact
+    // numbers behind the drawn polygon, so the corridor cannot disagree with
+    // what is on screen.
+    const outerBand = (warped) => {
+      const bands = warped?.thermal?.bands ?? [];
+      if (!bands.length) return null;
+      return bands.reduce((a, b) =>
+        (b.radius_no_wind_m ?? 0) > (a.radius_no_wind_m ?? 0) ? b : a
+      );
+    };
+    const bandA = outerBand(dualZoneData.facility_a);
+    const bandB = outerBand(dualZoneData.facility_b);
+    if (!bandA?.per_angle_radii || !bandB?.per_angle_radii) return [];
+    return [
+      { center: [centerA.lat, centerA.lng], perAngleRadii: bandA.per_angle_radii },
+      { center: [centerB.lat, centerB.lng], perAngleRadii: bandB.per_angle_radii },
+    ];
+  }, [dualZoneData, centerA.lat, centerA.lng, centerB]);
+
   // Only size- and position-affecting inputs, per FitToHazardBounds' rule.
   const fitKey = useMemo(
     () =>
@@ -119,6 +147,19 @@ const DualHazardMap = () => {
         Dual-facility view
       </div>
 
+      {/* Silence would read as "no hazard here". The backend's own reason
+          string says why there is no recommendation instead. */}
+      {jointApproach && jointApproach.available === false && (
+        <div className="pointer-events-none absolute left-3 top-3 z-[500] max-w-[min(22rem,60%)] rounded-card border border-alert-border bg-alert-surface px-3 py-2 shadow-overlay">
+          <p className="text-meta font-semibold text-ink">
+            No joint safe approach available
+          </p>
+          <p className="mt-0.5 text-meta leading-relaxed text-ink">
+            {jointApproach.reason}
+          </p>
+        </div>
+      )}
+
       <MapContainer
         center={[centerA.lat, centerA.lng]}
         zoom={14}
@@ -139,12 +180,17 @@ const DualHazardMap = () => {
         {/* Facility B -- SAME components, B's own independent bands. */}
         <FacilityZones warped={dualZoneData?.facility_b} />
 
-        {/* One JOINT corridor clearing both zones, drawn from the midpoint. */}
-        <SafeApproachWedge
-          safeApproach={dualZoneData?.joint_safe_approach}
-          centerLat={midpoint[0]}
-          centerLon={midpoint[1]}
-        />
+        {/* The JOINT approach corridor: wide at the safe outer end, narrowing
+            toward the incident, and drawn ONLY when the backend actually found
+            a clearing bearing. available === false means no bearing clears
+            both zones, so nothing is drawn rather than something wrong. */}
+        {jointApproach?.available ? (
+          <JointApproachCorridor
+            joint={jointApproach}
+            midpoint={midpoint}
+            facilities={facilities}
+          />
+        ) : null}
 
         <FacilityMarker position={[centerA.lat, centerA.lng]} label="Facility A" />
         {centerB && (

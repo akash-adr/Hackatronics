@@ -83,14 +83,23 @@ const FitToHazardBounds = ({ zoneData }) => {
   const map = useMap();
   const config = useFacilityStore((s) => s.config);
   const activePreset = useFacilityStore((s) => s.activePreset);
+  const timelineViewIndex = useFacilityStore((s) => s.timelineViewIndex);
   const lastFitKeyRef = useRef(null);
 
   // Only the size-affecting inputs appear in this key.
+  //
+  // timelineViewIndex is one of them: a replayed moment can be several times
+  // larger than the live one (Config B's 34.3 m fatal band against Config A's
+  // 7.8 m), and framing that on the live scenario's zoom crops it off the
+  // viewport. Scrubbing therefore refits, and returning to live refits back.
+  // With the timeline untouched the index is always null, so this key -- and
+  // the framing behaviour -- is exactly what it was before.
   const fitKey = [
     activePreset ?? 'custom',
     config.substance,
     config.tank_volume_m3,
     config.tank_diameter_m,
+    timelineViewIndex,
   ].join('|');
 
   useEffect(() => {
@@ -140,7 +149,9 @@ const RecenterAutomatically = ({ lat, lng }) => {
 };
 
 const HazardMap = () => {
-  const { facilityConfig, zoneData } = useFacilityStore();
+  const { facilityConfig } = useFacilityStore();
+  // Live result normally; the replayed snapshot while the timeline is scrubbed.
+  const zoneData = useFacilityStore((s) => s.getDisplayedZoneData());
 
   // Pure display preference -- deliberately local state, not in the Zustand
   // store, because it affects nothing that is computed.

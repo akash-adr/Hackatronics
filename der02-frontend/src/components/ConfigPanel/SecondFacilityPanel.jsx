@@ -162,12 +162,29 @@ const SecondFacilityPanel = () => {
           condition covers both sites.
         </p>
 
-        {joint && (
+        {joint?.available && (
           <div className="mt-4 rounded-card border border-line bg-surface-muted px-3 py-2">
             <p className="text-meta text-subtle">Joint approach</p>
             <p className="mt-0.5 text-body font-medium text-ink tnum">
               {joint.best_bearing_deg}° · {joint.min_standoff_m} m standoff
             </p>
+            {joint.min_standoff_m === 0 && (
+              <p className="mt-1 text-meta text-subtle">
+                The midpoint between the two facilities already lies outside
+                both hazard zones.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* No bearing clears both zones: say so plainly rather than showing a
+            recommendation that does not exist. */}
+        {joint && joint.available === false && (
+          <div className="mt-4 rounded-card border border-alert-border bg-alert-surface px-3 py-2">
+            <p className="text-meta font-semibold text-ink">
+              No joint safe approach
+            </p>
+            <p className="mt-0.5 text-meta text-ink">{joint.reason}</p>
           </div>
         )}
 

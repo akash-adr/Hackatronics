@@ -1,6 +1,6 @@
 import React from 'react';
 import useFacilityStore from '../../store/useFacilityStore';
-import { fatalRadiusM } from './KeyFigures';
+import { getFatalRadius } from '../../utils/hazard';
 
 /**
  * Full-width glance target under the map.
@@ -16,10 +16,10 @@ const Divider = () => (
 );
 
 const IncidentSummaryStrip = () => {
-  const zoneData = useFacilityStore((s) => s.zoneData);
+  const zoneData = useFacilityStore((s) => s.getDisplayedZoneData());
   const facilityConfig = useFacilityStore((s) => s.facilityConfig);
 
-  const fatal = fatalRadiusM(zoneData);
+  const fatal = getFatalRadius(zoneData);
   const safe = zoneData?.safe_approach;
 
   return (

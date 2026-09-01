@@ -1,22 +1,17 @@
 import React from 'react';
 import useFacilityStore from '../../store/useFacilityStore';
+import { getFatalRadius } from '../../utils/hazard';
 import Card from '../ui/Card';
 import SectionLabel from '../ui/SectionLabel';
-
-/** Fatal thermal band radius, or null if absent. */
-export function fatalRadiusM(zoneData) {
-  const band = zoneData?.thermal?.bands?.find((b) => b.label === 'fatal');
-  return band?.radius_no_wind_m ?? null;
-}
 
 /**
  * The two figures a commander needs first, shown large enough to read from
  * across a room. Both are read from the central store -- never fetched here.
  */
 const KeyFigures = () => {
-  const zoneData = useFacilityStore((s) => s.zoneData);
+  const zoneData = useFacilityStore((s) => s.getDisplayedZoneData());
 
-  const fatal = fatalRadiusM(zoneData);
+  const fatal = getFatalRadius(zoneData);
   const safe = zoneData?.safe_approach;
 
   return (

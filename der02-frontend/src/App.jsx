@@ -16,6 +16,8 @@ import {
 import FacilitySelector from './components/ConfigPanel/FacilitySelector';
 import CustomFacilityForm from './components/ConfigPanel/CustomFacilityForm';
 import ComparisonView from './components/ConfigPanel/ComparisonView';
+import IncidentTimeline from './components/Dashboard/IncidentTimeline';
+import WorstMomentCard from './components/Dashboard/WorstMomentCard';
 import SecondFacilityPanel from './components/ConfigPanel/SecondFacilityPanel';
 import SectionLabel from './components/ui/SectionLabel';
 import Card from './components/ui/Card';
@@ -91,6 +93,9 @@ function App() {
             </Card>
 
             <ComparisonView />
+
+            <IncidentTimeline />
+            <WorstMomentCard />
 
             <SecondFacilityPanel />
 

@@ -21,7 +21,7 @@ const DESIGN_MAX_KMH = 60; // Module 2's design-maximum wind speed
  * drawn "up" direction, so a to_deg rotation maps directly.
  */
 const WindArrow = () => {
-  const zoneData = useFacilityStore((s) => s.zoneData);
+  const zoneData = useFacilityStore((s) => s.getDisplayedZoneData());
   const facilityConfig = useFacilityStore((s) => s.facilityConfig);
 
   const wind = zoneData?.wind;

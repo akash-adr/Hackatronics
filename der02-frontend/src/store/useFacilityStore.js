@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { getFatalRadius } from '../utils/hazard';
 import {
   checkEscalation,
   fetchComputeZone,
@@ -175,6 +176,12 @@ const useFacilityStore = create((set, get) => ({
   fallbackPreset: null,
   hardFailure: null,
 
+  // --- incident timeline & replay (additive) ---
+  incidentLog: [],
+  incidentStartTime: null,
+  timelineViewIndex: null,
+  isTimelineReplay: false,
+
   // --- second facility & combined threat assessment (additive) ---
   secondFacilityEnabled: false,
   secondFacilityConfig: null, // { substance, tank_volume_m3, tank_diameter_m, lat, lng }
@@ -224,6 +231,12 @@ const useFacilityStore = create((set, get) => ({
    * Only the most recently issued request is allowed to update the store.
    */
   recompute: async () => {
+    // Touching a live control creates new live data, so any replay view is
+    // left automatically -- otherwise the map would freeze on a past moment
+    // while fresh results land behind it. Guarded, so the normal live path
+    // does not set state it isn't changing.
+    if (get().isTimelineReplay) get().exitTimelineReplay();
+
     const { config } = get();
     const id = ++requestCounter;
     latestRequestId = id;
@@ -300,6 +313,15 @@ const useFacilityStore = create((set, get) => ({
           ? { ...state.results, [preset]: data }
           : state.results,
       }));
+
+      // Timeline snapshot. Sits AFTER the set() above and on the same path,
+      // so a superseded response -- already dropped by the request-id guard
+      // further up -- can never be logged.
+      get().logIncidentSnapshot(
+        data,
+        config,
+        servedFromCache ? 'preset_load' : change.changed ? 'wind_shift' : 'manual_edit'
+      );
 
       // A second facility, if placed, is re-checked against the new zones.
       // This rides the existing debounced recompute rather than adding a
@@ -442,6 +464,55 @@ const useFacilityStore = create((set, get) => ({
     } catch {
       set({ escalationError: 'Could not refresh escalation risk.' });
     }
+  },
+
+  logIncidentSnapshot: (zoneData, config, trigger) => {
+    const { incidentLog, incidentStartTime } = get();
+    const now = Date.now();
+    const startTime = incidentStartTime ?? now;
+    const worstFatalRadius = getFatalRadius(zoneData);
+    const entry = {
+      timestamp: now,
+      elapsedSeconds: Math.round((now - startTime) / 1000),
+      config: { ...config },
+      zoneData,
+      worstFatalRadius,
+      trigger,
+    };
+    set({
+      incidentLog: [...incidentLog, entry],
+      incidentStartTime: startTime,
+    });
+  },
+
+  /**
+   * What the dashboard should DISPLAY right now: the live result normally,
+   * or the logged snapshot being replayed. Derived from existing state --
+   * no new field, no set(), and with timelineViewIndex null it returns the
+   * exact same zoneData reference every panel read before this feature.
+   */
+  getDisplayedZoneData: () => {
+    const { zoneData, incidentLog, timelineViewIndex } = get();
+    if (timelineViewIndex === null) return zoneData; // normal live view, unchanged
+    return incidentLog[timelineViewIndex]?.zoneData ?? zoneData;
+  },
+
+  viewTimelineEntry: (index) => {
+    const { incidentLog } = get();
+    if (index < 0 || index >= incidentLog.length) return;
+    set({ timelineViewIndex: index, isTimelineReplay: true });
+  },
+
+  exitTimelineReplay: () => {
+    set({ timelineViewIndex: null, isTimelineReplay: false });
+  },
+
+  getWorstMoment: () => {
+    const { incidentLog } = get();
+    if (incidentLog.length === 0) return null;
+    return incidentLog.reduce((worst, entry) =>
+      (entry.worstFatalRadius ?? 0) > (worst.worstFatalRadius ?? 0) ? entry : worst
+    );
   },
 
   enableSecondFacility: (initialConfig) => {

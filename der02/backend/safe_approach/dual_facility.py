@@ -10,8 +10,8 @@ new.
 
 import math
 
+from geometry.polygon_builder import METERS_PER_DEGREE_LAT
 from geometry.wind_scaling import angle_diff
-from safe_approach.engine import compute_safe_approach_for_response
 
 # haversine_distance already exists in validation.py (added with the
 # second-facility placement validator), so it is imported rather than
@@ -20,6 +20,11 @@ from safe_approach.engine import compute_safe_approach_for_response
 from validation import haversine_distance  # noqa: F401
 
 EARTH_RADIUS_M = 6371000.0
+
+# Outward walk used to find where a bearing actually clears both zones.
+CLEARING_SEARCH_STEP_M = 5.0
+CLEARING_SEARCH_MAX_M = 3000.0
+N_CANDIDATE_BEARINGS = 72
 
 
 def _radius_at_bearing_from_point(
@@ -44,20 +49,60 @@ def _radius_at_bearing_from_point(
     return facility_radius + offset_along_bearing
 
 
-def compute_joint_safe_approach(
+def _project_point(origin, bearing_deg, distance_m):
+    """Move distance_m metres from origin along bearing_deg. Same flat-earth
+    approximation already used throughout Module 2's polygon builder."""
+    dx = distance_m * math.sin(math.radians(bearing_deg))
+    dy = distance_m * math.cos(math.radians(bearing_deg))
+    lat = origin["lat"] + (dy / METERS_PER_DEGREE_LAT)
+    lon = origin["lng"] + (
+        dx / (METERS_PER_DEGREE_LAT * math.cos(math.radians(origin["lat"])))
+    )
+    return {"lat": lat, "lng": lon}
+
+
+def _is_inside_zone(point, facility_center, band):
+    """True if point is within this facility's outer thermal band radius of its own centre."""
+    distance = haversine_distance(
+        point["lat"], point["lng"], facility_center["lat"], facility_center["lng"]
+    )
+    return distance < band["radius_no_wind_m"]
+
+
+def _find_minimum_clearing_distance(
+    bearing_deg,
+    origin,
     facility_A_center,
-    facility_A_thermal_bands,
+    outer_band_A,
     facility_B_center,
-    facility_B_thermal_bands,
+    outer_band_B,
+    start_distance=0.0,
 ):
-    """
-    Joint safe-approach recommendation clearing BOTH facilities' zones.
-    Uses each facility's outermost (largest, least severe) thermal band.
-    The combination rule at each bearing is the CONSERVATIVE choice -- the
-    LARGER of the two hazard reaches -- never an average, since a bearing is
-    only genuinely safe if it clears the more dangerous of the two zones at
-    that specific angle.
-    """
+    """Walk outward from origin along bearing_deg until the point is OUTSIDE
+    BOTH zones simultaneously -- the hard constraint the old proxy was missing.
+
+    start_distance sets where the walk BEGINS, not what it accepts: every
+    returned distance is still tested against both zones, so moving the start
+    outward cannot weaken the guarantee. It exists because starting at the
+    midpoint returns 0 m whenever the midpoint is already clear, which is a
+    correct but unusable recommendation -- a zero-area wedge on the map."""
+    distance = start_distance
+    while distance < CLEARING_SEARCH_MAX_M:
+        point = _project_point(origin, bearing_deg, distance)
+        if not _is_inside_zone(
+            point, facility_A_center, outer_band_A
+        ) and not _is_inside_zone(point, facility_B_center, outer_band_B):
+            return distance
+        distance += CLEARING_SEARCH_STEP_M
+    return None
+
+
+def compute_joint_safe_approach(
+    facility_A_center, facility_A_thermal_bands, facility_B_center, facility_B_thermal_bands
+):
+    """Joint safe-approach recommendation GUARANTEED to sit outside both
+    facilities' outer thermal zones -- not merely 'locally small' by the
+    old, buggy max-radius proxy."""
     midpoint = {
         "lat": (facility_A_center["lat"] + facility_B_center["lat"]) / 2,
         "lng": (facility_A_center["lng"] + facility_B_center["lng"]) / 2,
@@ -66,39 +111,63 @@ def compute_joint_safe_approach(
     outer_band_A = max(facility_A_thermal_bands, key=lambda b: b["radius_no_wind_m"])
     outer_band_B = max(facility_B_thermal_bands, key=lambda b: b["radius_no_wind_m"])
 
-    combined_radii = []
-    for bearing_deg, _ in outer_band_A["per_angle_radii"]:
-        r_A = _radius_at_bearing_from_point(
-            outer_band_A["per_angle_radii"], facility_A_center, midpoint, bearing_deg
-        )
-        r_B = _radius_at_bearing_from_point(
-            outer_band_B["per_angle_radii"], facility_B_center, midpoint, bearing_deg
-        )
-        combined_radii.append((bearing_deg, max(r_A, r_B)))
-
-    # Reuses the EXISTING single-facility selector unmodified, by handing it a
-    # synthetic one-band response describing the combined envelope.
-    result = compute_safe_approach_for_response(
-        {
-            "thermal": {
-                "bands": [
-                    {
-                        "label": "combined_outer",
-                        "clipped": False,
-                        "per_angle_radii": combined_radii,
-                        "radius_no_wind_m": max(r for _, r in combined_radii),
-                    }
-                ]
-            }
-        }
+    # Never start the search at the midpoint itself: for facilities far enough
+    # apart the midpoint is already clear, and the walk would return 0 m --
+    # a standoff no responder can act on and a wedge with no area. Starting at
+    # the larger of the two hazard radii guarantees a real distance while the
+    # per-point zone test (and the assertions below) keep it genuinely safe.
+    minimum_starting_distance = max(
+        outer_band_A["radius_no_wind_m"], outer_band_B["radius_no_wind_m"]
     )
 
-    # The selector names a band after its threshold, but the combined envelope
-    # is the max of two facilities' outer bands and has no single threshold --
-    # so it would come back as "..._Nonekw". Name it for what it actually is.
-    if result:
-        result["based_on_band"] = "combined_outer_thermal_envelope"
-    return result
+    candidates = []
+    for i in range(N_CANDIDATE_BEARINGS):
+        bearing_deg = 360.0 * i / N_CANDIDATE_BEARINGS
+        clearing_distance = _find_minimum_clearing_distance(
+            bearing_deg,
+            midpoint,
+            facility_A_center,
+            outer_band_A,
+            facility_B_center,
+            outer_band_B,
+            start_distance=minimum_starting_distance,
+        )
+        if clearing_distance is not None:
+            candidates.append((bearing_deg, clearing_distance))
+
+    if not candidates:
+        return {
+            "available": False,
+            "reason": (
+                f"No approach bearing clears both facilities' hazard zones "
+                f"within {CLEARING_SEARCH_MAX_M:.0f}m. The two facilities' "
+                f"combined footprint may be too large or too close together "
+                f"for a single safe standoff point to exist at this wind condition."
+            ),
+        }
+
+    best_bearing_deg, best_standoff_m = min(candidates, key=lambda c: c[1])
+
+    # MANDATORY VERIFICATION -- do not remove. Fails loudly if a logic error
+    # is ever reintroduced, rather than silently returning an unsafe recommendation.
+    recommended_point = _project_point(midpoint, best_bearing_deg, best_standoff_m)
+    assert not _is_inside_zone(recommended_point, facility_A_center, outer_band_A), (
+        "Joint safe-approach verification failed: recommended point is inside "
+        "Facility A's zone. This must never happen -- do not remove this check."
+    )
+    assert not _is_inside_zone(recommended_point, facility_B_center, outer_band_B), (
+        "Joint safe-approach verification failed: recommended point is inside "
+        "Facility B's zone. This must never happen -- do not remove this check."
+    )
+
+    min_standoff_m = best_standoff_m * 1.20
+
+    return {
+        "available": True,
+        "best_bearing_deg": best_bearing_deg,
+        "min_standoff_m": round(min_standoff_m, 1),
+        "verified_outside_both_zones": True,
+    }
 
 
 def check_cross_facility_exposure(

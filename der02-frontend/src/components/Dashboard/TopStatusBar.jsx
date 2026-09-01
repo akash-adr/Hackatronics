@@ -1,5 +1,5 @@
 import React from 'react';
-import { Flame } from 'lucide-react';
+import { Flame, Rewind } from 'lucide-react';
 import useFacilityStore from '../../store/useFacilityStore';
 import { degreesToCompass } from '../../utils/compass';
 
@@ -11,9 +11,10 @@ import { degreesToCompass } from '../../utils/compass';
  * there is no second source that could disagree with it.
  */
 const TopStatusBar = () => {
-  const zoneData = useFacilityStore((s) => s.zoneData);
+  const zoneData = useFacilityStore((s) => s.getDisplayedZoneData());
   const config = useFacilityStore((s) => s.config);
   const isLive = useFacilityStore((s) => s.isLive);
+  const isTimelineReplay = useFacilityStore((s) => s.isTimelineReplay);
 
   // Prefer the wind the backend echoed back with the current result; fall
   // back to the pending input while the first response is still in flight.
@@ -43,7 +44,14 @@ const TopStatusBar = () => {
 
         {/* Neutral, not safe-green: green is reserved for the approach
             corridor. Live vs stale is carried by weight and the dot. */}
-        {isLive ? (
+        {/* Replay outranks live/stale: while a past moment is on screen this
+            badge must never be able to read "Live". */}
+        {isTimelineReplay ? (
+          <span className="flex items-center gap-1.5 rounded-full border border-alert-border bg-alert-surface px-2.5 py-1 text-meta font-semibold uppercase tracking-wider text-ink">
+            <Rewind className="h-3 w-3 text-alert" aria-hidden="true" />
+            Replay
+          </span>
+        ) : isLive ? (
           <span className="flex items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-meta font-semibold uppercase tracking-wider text-ink">
             <span className="h-1.5 w-1.5 rounded-full bg-ink" />
             Live
