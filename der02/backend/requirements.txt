@@ -6,3 +6,6 @@ sqlalchemy==2.0.52
 pymysql==1.2.0
 python-dotenv==1.2.3
 pytest==9.1.1
+google-generativeai==0.8.6
+# Test-only: fastapi's TestClient (used by tests/test_ai_suggestions.py).
+httpx==0.28.1

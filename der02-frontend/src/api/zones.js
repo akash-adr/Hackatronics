@@ -62,3 +62,21 @@ export const fetchComputeZoneDual = async (payload, { signal } = {}) => {
   });
   return response.data;
 };
+
+
+// The AI endpoint is a proxy to a metered external model, and measured latency
+// is 6-13 s -- far beyond COMPUTE_TIMEOUT_MS. It gets its own, much longer
+// budget so a normal-speed suggestion is never aborted as if it had failed.
+const AI_SUGGESTION_TIMEOUT_MS = 35000;
+
+/**
+ * Ask the backend for a safety suggestion. The Gemini key lives server-side;
+ * this only ever talks to our own origin.
+ */
+export const fetchAiSuggestion = async (payload, { signal } = {}) => {
+  const response = await apiClient.post('/api/ai-suggestion', payload, {
+    signal,
+    timeout: AI_SUGGESTION_TIMEOUT_MS,
+  });
+  return response.data;
+};

@@ -24,13 +24,21 @@ request_log = defaultdict(list)
 RATE_LIMIT_PER_SECOND = 10
 WINDOW_SECONDS = 1.0
 
+# The AI suggestion endpoint spends money on every miss, so it gets a much
+# tighter budget than the local compute endpoint. It also uses a separate
+# bucket key, so the two allowances are independent.
+AI_RATE_LIMIT_PER_SECOND = 2
 
-def check_rate_limit(client_id):
+
+def check_rate_limit(client_id, limit=RATE_LIMIT_PER_SECOND):
     """
     Record a request and report whether it is allowed.
 
     Returns True if the caller is within budget (and counts the request),
     False if it has already used its full allowance in the current window.
+
+    `limit` defaults to the compute endpoint's allowance, so every existing
+    call site behaves exactly as before.
     """
     now = time.time()
 
@@ -39,7 +47,7 @@ def check_rate_limit(client_id):
     recent = [t for t in request_log[client_id] if now - t < WINDOW_SECONDS]
     request_log[client_id] = recent
 
-    if len(recent) >= RATE_LIMIT_PER_SECOND:
+    if len(recent) >= limit:
         return False
 
     request_log[client_id].append(now)
