@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { getFatalRadius } from '../utils/hazard';
+import { scaleDualZoneData, scaleZoneData } from '../utils/growth';
 import {
   checkEscalation,
   fetchComputeZone,
@@ -21,6 +22,9 @@ import {
 // instead of dozens.
 const SLIDER_DEBOUNCE_MS = 120;
 
+// Long enough to read as growth, short enough not to make the user wait.
+const SIMULATION_DURATION_MS = 3500;
+
 // ---------------------------------------------------------------------------
 // Race handling.
 //
@@ -33,6 +37,14 @@ let requestCounter = 0;
 let latestRequestId = 0;
 let debounceTimer = null;
 let dualDebounceTimer = null;
+let simulationTimer = null;
+
+// ~60 fps while visible. A timer rather than requestAnimationFrame on
+// purpose: rAF is suspended in a background or hidden tab, which would leave
+// the animation frozen at growth 0 -- zones collapsed to a point -- until the
+// user came back. An interval keeps firing (clamped, so just choppier) and
+// progress is read from the clock, so it still finishes on time and on value.
+const SIMULATION_TICK_MS = 16;
 
 // initialize() is idempotent. React StrictMode invokes mount effects twice
 // in development, and without this guard the startup pre-compute would
@@ -176,6 +188,17 @@ const useFacilityStore = create((set, get) => ({
   fallbackPreset: null,
   hardFailure: null,
 
+  // --- run-simulation growth animation (cosmetic; additive) ---
+  // simulationGrowth stays null when idle, so every selector below returns
+  // exactly what it returned before this feature existed.
+  simulating: false,
+  simulationGrowth: null,
+  // The scaled copies are built ONCE per frame and cached here. Building them
+  // inside the selector instead returns a new object on every render, which
+  // Zustand sees as a changed snapshot -- an infinite render loop.
+  simulationZone: null,
+  simulationDual: null,
+
   // --- incident timeline & replay (additive) ---
   incidentLog: [],
   incidentStartTime: null,
@@ -236,6 +259,11 @@ const useFacilityStore = create((set, get) => ({
     // while fresh results land behind it. Guarded, so the normal live path
     // does not set state it isn't changing.
     if (get().isTimelineReplay) get().exitTimelineReplay();
+    // Same reasoning for the growth animation: a stale animation must never
+    // keep playing over data it was not started from.
+    if (get().simulating || get().simulationGrowth !== null) {
+      get().skipSimulation();
+    }
 
     const { config } = get();
     const id = ++requestCounter;
@@ -493,8 +521,113 @@ const useFacilityStore = create((set, get) => ({
    */
   getDisplayedZoneData: () => {
     const { zoneData, incidentLog, timelineViewIndex } = get();
-    if (timelineViewIndex === null) return zoneData; // normal live view, unchanged
-    return incidentLog[timelineViewIndex]?.zoneData ?? zoneData;
+    const base =
+      timelineViewIndex === null
+        ? zoneData // normal live view, unchanged
+        : (incidentLog[timelineViewIndex]?.zoneData ?? zoneData);
+
+    // Idle: the exact same object every panel read before this feature.
+    return get().simulationZone ?? base;
+  },
+
+  /** Dual-facility twin of the above: both facilities grow from their own centres. */
+  getDisplayedDualZoneData: () => {
+    const { dualZoneData, simulationDual } = get();
+    return simulationDual ?? dualZoneData;
+  },
+
+  /**
+   * The config that produced whatever is currently DISPLAYED -- the live one
+   * normally, the replayed snapshot's own config while scrubbing. Same shape
+   * and same rule as getDisplayedZoneData, so the summary block can never
+   * describe a different moment than the map.
+   */
+  /**
+   * Play the growth animation over the CURRENT, already-computed result.
+   *
+   * Cosmetic only: it interpolates the existing response between a point at
+   * the facility and its real extent. No recompute, no request, and the last
+   * frame restores the untouched data, so the app lands exactly where it
+   * started.
+   */
+  runSimulation: () => {
+    // Snapshot the CURRENT, already-computed result. Nothing is recomputed and
+    // no request is made -- the animation only interpolates this.
+    const baseZone = get().getDisplayedZoneData();
+    if (!baseZone) return; // nothing computed yet
+    const baseDual = get().dualZoneData;
+    const centerB = get().secondFacilityConfig;
+
+    if (simulationTimer !== null) clearInterval(simulationTimer);
+    const startedAt = performance.now();
+
+    const frameFor = (growth) => ({
+      simulationGrowth: growth,
+      simulationZone: scaleZoneData(
+        baseZone,
+        FACILITY_CENTER.lat,
+        FACILITY_CENTER.lng,
+        growth
+      ),
+      simulationDual: baseDual
+        ? scaleDualZoneData(
+            baseDual,
+            { a: FACILITY_CENTER, b: centerB },
+            growth
+          )
+        : null,
+    });
+
+    set({ simulating: true, ...frameFor(0) });
+
+    const step = () => {
+      const now = performance.now();
+      // Progress comes from the CLOCK, not a frame counter, so a dropped or
+      // throttled frame changes smoothness -- never the duration or the value
+      // it finishes on.
+      const t = Math.min(1, (now - startedAt) / SIMULATION_DURATION_MS);
+
+      if (t >= 1) {
+        clearInterval(simulationTimer);
+        simulationTimer = null;
+        // Cleared rather than set to 1: the selectors then hand back the
+        // ORIGINAL objects, so the last frame is the untouched live data.
+        set({
+          simulating: false,
+          simulationGrowth: null,
+          simulationZone: null,
+          simulationDual: null,
+        });
+        return;
+      }
+
+      // Ease-out: quick initial spread, settling onto the true extent.
+      set(frameFor(1 - Math.pow(1 - t, 3)));
+    };
+
+    simulationTimer = setInterval(step, SIMULATION_TICK_MS);
+  },
+
+  /** Jump straight to the real result. Same end state as letting it finish. */
+  skipSimulation: () => {
+    if (simulationTimer !== null) {
+      clearInterval(simulationTimer);
+      simulationTimer = null;
+    }
+    if (get().simulating || get().simulationGrowth !== null) {
+      set({
+        simulating: false,
+        simulationGrowth: null,
+        simulationZone: null,
+        simulationDual: null,
+      });
+    }
+  },
+
+  getDisplayedConfig: () => {
+    const { config, incidentLog, timelineViewIndex } = get();
+    if (timelineViewIndex === null) return config;
+    return incidentLog[timelineViewIndex]?.config ?? config;
   },
 
   viewTimelineEntry: (index) => {

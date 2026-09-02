@@ -1,6 +1,7 @@
 import React from 'react';
 import { Flame, Rewind } from 'lucide-react';
 import useFacilityStore from '../../store/useFacilityStore';
+import ThemeToggle from './ThemeToggle';
 import { degreesToCompass } from '../../utils/compass';
 
 /**
@@ -62,6 +63,10 @@ const TopStatusBar = () => {
             Stale — recomputing
           </span>
         )}
+
+        {/* Shell theme only. The map's basemap toggle is separate and stays
+            independent of this control. */}
+        <ThemeToggle />
       </div>
     </header>
   );

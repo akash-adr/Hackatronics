@@ -3,41 +3,48 @@ import { Polygon, Tooltip } from 'react-leaflet';
 import { SAFE_APPROACH_COLOR } from '../../theme';
 
 /**
- * Dual-facility approach corridor.
+ * Combined approach sector for TWO facilities.
  *
- * A separate component from SafeApproachWedge on purpose: the single-facility
- * wedge is a pie slice with its apex ON the facility (it answers "which way do
- * I stand off"), and it stays exactly as it is. This one answers a different
- * question -- "which way do I walk IN" -- so it is drawn the other way round:
- * WIDE at the safe outer end, narrowing toward the facilities, and truncated
- * well before it reaches them.
+ * ONE continuous polygon -- never two overlaid wedges -- built entirely from
+ * latitude/longitude and the backend's calculated bearing. Nothing here is a
+ * pixel offset or an eyeballed angle.
  *
- * Geometry, measured from the midpoint of the two facilities (the point the
- * backend's joint bearing is computed from):
+ * SHAPE: an annular sector (a fan with an arc at both ends) anchored on the
+ * geographic centre of the two facilities:
  *
- *   outer edge    min_standoff_m * 1.15   the safe starting point
- *   inner edge    min_standoff_m * 0.35   pushed back out if that would put a
- *                                         corner inside either drawn zone
- *   width         +/-15 degrees at both ends, so the corridor narrows in
- *                 absolute metres as it closes on the incident
+ *   centre    the mean of A and B -- the same reference the backend computes
+ *             its joint bearing from, so the drawn axis and the reported
+ *             degree cannot disagree
+ *   rInner    the smallest radius whose ENTIRE inner arc lies outside the
+ *             combined affected region: the sector starts where the hazard
+ *             ends, and its inner arc wraps around both facilities
+ *   rOuter    extends outward along the bearing, arc-terminated
+ *   2*alpha   wide enough that the inner arc spans the pair -- the chord
+ *             across the sector at rInner is at least the A-B separation, so
+ *             the shape reads as connecting them rather than pointing past one
+ *
+ * Because the angle is constant and the radius grows, the sector widens
+ * smoothly outward on its own -- no separate taper term.
+ *
+ * OVERLAPPING FACILITIES: the region test is "inside EITHER facility's zone",
+ * so two overlapping footprints are treated as one combined area by
+ * construction; no special case is needed.
  *
  * CLEARANCE IS TESTED AGAINST THE WARPED ZONES, not the nominal radius. The
- * backend's standoff is computed against radius_no_wind_m, but the polygons on
- * screen are wind-warped and reach up to ~1.6x that downwind (measured: 176 m
- * against a nominal 110 m at 90 km/h). Testing the nominal radius therefore
- * drew corridors that visibly cut through the pain band in strong wind.
+ * polygons on screen are wind-warped and reach up to ~1.6x radius_no_wind_m
+ * downwind (measured: 176 m against a nominal 110 m at 90 km/h), so testing
+ * the nominal radius would let the sector cut through a drawn band.
  */
 
 const METERS_PER_DEGREE_LAT = 111320.0;
 
-const OUTER_EXTENT_FACTOR = 1.15; // same convention as the single-facility wedge
-const INNER_EXTENT_FACTOR = 0.35; // "still well short of the facilities"
-const HALF_WIDTH_DEG = 15;
-const ARC_STEP_DEG = 2.5;
-
-const CLEARANCE_MARGIN_M = 15; // the visible gap the corridor keeps
+const HALF_ANGLE_MIN_DEG = 22; // never a slit, even for coincident facilities
+const HALF_ANGLE_MAX_DEG = 62; // never so wide it stops reading as a direction
+const ARC_STEP_DEG = 2; // outer/inner arc sampling -> smooth curves
+const DEPTH_FACTOR = 1.9; // rOuter = rInner * this, at minimum
+const CLEARANCE_MARGIN_M = 12; // visible gap between hazard edge and sector
 const SEARCH_STEP_M = 5;
-const MAX_OUTER_EXTENSION_M = 1500; // give up rather than draw something absurd
+const MAX_SEARCH_M = 4000;
 
 /** Flat-earth offset, the same model the backend and the other layers use. */
 function project(lat, lon, bearingDeg, distanceM) {
@@ -50,7 +57,7 @@ function project(lat, lon, bearingDeg, distanceM) {
   ];
 }
 
-/** Metres and bearing from a facility centre to a point. */
+/** Metres and bearing from one lat/lon to another. */
 function vectorFrom([fromLat, fromLon], [toLat, toLon]) {
   const dy = (toLat - fromLat) * METERS_PER_DEGREE_LAT;
   const dx =
@@ -63,7 +70,7 @@ function vectorFrom([fromLat, fromLon], [toLat, toLon]) {
   };
 }
 
-/** The zone's own reach at that bearing -- nearest of the 72 samples. */
+/** A facility's own reach at that bearing -- nearest of its 72 samples. */
 function warpedRadiusAt(perAngleRadii, bearingDeg) {
   let best = perAngleRadii[0];
   let smallest = 360;
@@ -77,17 +84,26 @@ function warpedRadiusAt(perAngleRadii, bearingDeg) {
   return best[1];
 }
 
-const JointApproachCorridor = ({ joint, midpoint, facilities }) => {
-  const positions = useMemo(() => {
-    if (!joint?.available || !joint.min_standoff_m) return null;
-    if (!facilities.length) return null;
+/**
+ * The sector's ring, as [lat, lon] pairs -- exported so the map can include it
+ * in its fit bounds. One definition of the geometry, two consumers.
+ */
+export function computeSectorPositions({ joint, midpoint, facilities }) {
+  {
+    if (!joint?.available) return null;
+    if (facilities.length < 2) return null;
 
-    const [midLat, midLon] = midpoint;
-    const bearing = joint.best_bearing_deg;
-    const start = bearing - HALF_WIDTH_DEG;
-    const end = bearing + HALF_WIDTH_DEG;
+    // --- 1. Geographic reference point: the centre of the two facilities. ---
+    const [centreLat, centreLon] = midpoint;
+    const bearing = joint.best_bearing_deg; // the CALCULATED axis, used as-is
 
-    /** Clear of every facility's warped outer band, by the margin. */
+    // --- 2. How far apart are they, measured from that centre? ---
+    const separationM = vectorFrom(
+      facilities[0].center,
+      facilities[1].center
+    ).distanceM;
+
+    /** Outside EVERY facility's warped zone, by the margin. */
     const pointIsClear = (point) =>
       facilities.every((f) => {
         const { distanceM, bearingDeg } = vectorFrom(f.center, point);
@@ -97,45 +113,106 @@ const JointApproachCorridor = ({ joint, midpoint, facilities }) => {
         );
       });
 
-    const edgeIsClear = (radius, angles) =>
-      angles.every((a) => pointIsClear(project(midLat, midLon, a, radius)));
+    // --- 3. Half-angle: wide enough that the inner arc spans the pair. ---
+    // chord = 2 * r * sin(alpha) >= separation  =>  alpha >= asin(sep / 2r).
+    // Solved against a first-guess radius, then re-solved once rInner is
+    // known, so the two stay consistent.
+    const halfAngleFor = (radius) => {
+      const ratio = Math.min(1, separationM / (2 * Math.max(radius, 1)));
+      const needed = (Math.asin(ratio) * 180) / Math.PI;
+      return Math.min(
+        HALF_ANGLE_MAX_DEG,
+        Math.max(HALF_ANGLE_MIN_DEG, needed)
+      );
+    };
 
-    // The outer edge starts where the backend says, and is pushed further out
-    // only if the warped zones actually reach it.
-    const arcAngles = [];
-    for (let a = start; a <= end; a += ARC_STEP_DEG) arcAngles.push(a);
-    if (arcAngles[arcAngles.length - 1] !== end) arcAngles.push(end);
+    /** Bearings sampled across the sector, inclusive of both edges. */
+    const arcBearings = (halfAngle) => {
+      const out = [];
+      for (let a = -halfAngle; a < halfAngle; a += ARC_STEP_DEG) {
+        out.push(bearing + a);
+      }
+      out.push(bearing + halfAngle);
+      return out;
+    };
 
-    let outerRadius = joint.min_standoff_m * OUTER_EXTENT_FACTOR;
-    const outerLimit = outerRadius + MAX_OUTER_EXTENSION_M;
-    while (outerRadius < outerLimit && !edgeIsClear(outerRadius, arcAngles)) {
-      outerRadius += SEARCH_STEP_M;
+    // --- 4. rInner: the radius at which the inner arc lies BEYOND the whole
+    //        combined affected region.
+    //
+    //        Not "the first radius that happens to be clear": when the two
+    //        facilities are far enough apart, the centre point BETWEEN them is
+    //        already clear, and a first-clear rule would start the fan in that
+    //        gap -- pointing out from between the facilities instead of
+    //        wrapping around them. Taking, for each facility, its distance
+    //        from the centre PLUS its own furthest reach puts the arc outside
+    //        every part of the combined region, whichever facility dominates.
+    //        Overlapping footprints need no special case: the max simply
+    //        resolves to the pair's outer envelope.
+    const enclosingRadius = Math.max(
+      ...facilities.map((f) => {
+        const reach = Math.max(...f.perAngleRadii.map(([, r]) => r));
+        return vectorFrom([centreLat, centreLon], f.center).distanceM + reach;
+      })
+    );
+
+    let rInner = enclosingRadius + CLEARANCE_MARGIN_M;
+
+    // Safety net: the enclosing radius is derived from each facility's own
+    // reach, so the arc should already be clear -- but it is cheap to confirm
+    // point by point and step out if anything still overlaps.
+    let guard = 0;
+    while (
+      guard < MAX_SEARCH_M / SEARCH_STEP_M &&
+      !arcBearings(halfAngleFor(rInner)).every((b) =>
+        pointIsClear(project(centreLat, centreLon, b, rInner))
+      )
+    ) {
+      rInner += SEARCH_STEP_M;
+      guard += 1;
     }
-    if (outerRadius >= outerLimit) return null;
+    if (guard >= MAX_SEARCH_M / SEARCH_STEP_M) return null;
 
-    // Then the inner edge walks outward from 35% until it clears too.
-    let innerRadius = joint.min_standoff_m * INNER_EXTENT_FACTOR;
-    while (innerRadius < outerRadius && !edgeIsClear(innerRadius, [start, end])) {
-      innerRadius += SEARCH_STEP_M;
-    }
-    // Nothing between the two ends is clear -- draw nothing rather than a
-    // corridor that cuts through a hazard band.
-    if (innerRadius >= outerRadius) return null;
+    const halfAngle = halfAngleFor(rInner);
 
-    // Trapezoid: inner edge, out along one side, arc across the wide end,
-    // back down the other side. No vertex at the midpoint itself.
-    return [
-      project(midLat, midLon, start, innerRadius),
-      ...arcAngles.map((a) => project(midLat, midLon, a, outerRadius)),
-      project(midLat, midLon, end, innerRadius),
-    ];
-  }, [joint, midpoint, facilities]);
+    // --- 5. rOuter: extends outward along the bearing. Whichever is larger of
+    //        the backend's own standoff and a proportional depth, so the fan
+    //        always has visible depth to walk along.
+    const rOuter = Math.max(
+      rInner * DEPTH_FACTOR,
+      (joint.min_standoff_m ?? 0) * 1.15,
+      rInner + 60
+    );
+
+    // --- 6. One closed ring: inner arc across, then outer arc back. Both are
+    //        sampled arcs, so both boundaries are curved.
+    const bearings = arcBearings(halfAngle);
+    const innerArc = bearings.map((b) =>
+      project(centreLat, centreLon, b, rInner)
+    );
+    const outerArc = bearings
+      .slice()
+      .reverse()
+      .map((b) => project(centreLat, centreLon, b, rOuter));
+
+    return [...innerArc, ...outerArc];
+  }
+}
+
+const JointApproachCorridor = ({ joint, midpoint, facilities }) => {
+  const positions = useMemo(
+    () => computeSectorPositions({ joint, midpoint, facilities }),
+    [joint, midpoint, facilities]
+  );
 
   if (!positions) return null;
 
   return (
     <Polygon
       positions={positions}
+      // Leaflet's default simplification collapses a sampled arc into a few
+      // straight segments at low zoom; 0 keeps every sample, so the curved
+      // boundaries stay curved at every zoom level.
+      smoothFactor={0}
       pathOptions={{
         color: SAFE_APPROACH_COLOR,
         fillColor: SAFE_APPROACH_COLOR,
@@ -146,7 +223,7 @@ const JointApproachCorridor = ({ joint, midpoint, facilities }) => {
       }}
     >
       <Tooltip sticky className="der-tip">
-        Approach corridor: enter on {joint.best_bearing_deg}°, standoff{' '}
+        Combined approach sector: enter on {joint.best_bearing_deg}°, standoff{' '}
         {joint.min_standoff_m} m
       </Tooltip>
     </Polygon>

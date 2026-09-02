@@ -8,6 +8,20 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <title>DER-02 — Threat-Zone Estimation</title>
+    <script>
+      // Applies the saved theme BEFORE first paint. Doing this in a React
+      // effect instead would render one frame of the light shell and then
+      // swap -- a visible flash on every load for dark-mode users.
+      (function () {
+        try {
+          if (localStorage.getItem('der02.theme') === 'dark') {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (e) {
+          /* storage disabled: fall through to the light default */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

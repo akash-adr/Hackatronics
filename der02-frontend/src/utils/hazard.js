@@ -27,3 +27,36 @@ export function findBand(bands, label) {
 export function getFatalRadius(zoneData) {
   return findBand(zoneData?.thermal?.bands, 'fatal')?.radius_no_wind_m ?? null;
 }
+
+/**
+ * Threat level from the bands' own `clipped` flags.
+ *
+ * clipped=true means the solver never crossed that threshold inside its search
+ * range -- the radius is a search boundary, not a real hazard distance. So an
+ * UNCLIPPED fatal band is a genuine lethal envelope, an unclipped serious band
+ * a genuine injury envelope, and neither means the hazard stayed small.
+ */
+export function getThreatLevel(zoneData) {
+  const thermalBands = zoneData?.thermal?.bands ?? [];
+  const fatalBand = findBand(thermalBands, 'fatal');
+  const seriousBand = findBand(thermalBands, 'serious');
+
+  if (fatalBand && !fatalBand.clipped) return 'HIGH';
+  if (seriousBand && !seriousBand.clipped) return 'MEDIUM';
+  return 'LOW';
+}
+
+/** Supporting sentence for each level. */
+export const THREAT_LEVEL_MESSAGE = {
+  HIGH: 'Conditions may be lethal within Red Zones. Follow recommended safe approach corridor.',
+  MEDIUM:
+    'Serious injury possible within marked zones. Exercise caution and follow the safe approach corridor.',
+  LOW: 'Limited hazard extent under current conditions. Standard precautions apply.',
+};
+
+/** Which severity colour each level borrows -- never a new colour. */
+export const THREAT_LEVEL_SEVERITY = {
+  HIGH: 'fatal',
+  MEDIUM: 'serious',
+  LOW: 'pain',
+};

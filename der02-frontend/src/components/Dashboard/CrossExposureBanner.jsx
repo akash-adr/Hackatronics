@@ -23,9 +23,9 @@ const CrossExposureBanner = () => {
   return (
     <div
       role="alert"
-      className="mx-4 mb-1 flex flex-shrink-0 items-start gap-3 rounded-card border border-amber-400/60 border-l-4 border-l-amber-500 bg-amber-50 px-4 py-2.5"
+      className="mx-4 mb-1 flex flex-shrink-0 items-start gap-3 rounded-card border border-amber-400/60 border-l-4 border-l-amber-500 bg-amber-50 px-4 py-2.5 dark:border-amber-500/40 dark:border-l-amber-500 dark:bg-amber-500/10"
     >
-      <Flame className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" aria-hidden="true" />
+      <Flame className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
 
       <div className="min-w-0">
         <p className="text-body font-semibold text-ink">

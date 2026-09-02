@@ -6,7 +6,9 @@ import useFacilityStore from '../../store/useFacilityStore';
 import { FACILITY_CENTER } from '../../config/presets';
 import FacilityMarker from './FacilityMarker';
 import HazardZoneLayer from './HazardZoneLayer';
-import JointApproachCorridor from './JointApproachCorridor';
+import JointApproachCorridor, {
+  computeSectorPositions,
+} from './JointApproachCorridor';
 import WindArrow from './WindArrow';
 
 /**
@@ -42,7 +44,7 @@ const ResizeHandler = () => {
  * Keyed on the inputs that change zone SIZE or facility POSITION only -- so a
  * wind-direction nudge re-warps the polygons without yanking the viewport.
  */
-const FitToDualBounds = ({ dualZoneData, fitKey }) => {
+const FitToDualBounds = ({ dualZoneData, fitKey, sectorPositions }) => {
   const map = useMap();
 
   useEffect(() => {
@@ -57,6 +59,9 @@ const FitToDualBounds = ({ dualZoneData, fitKey }) => {
       );
       points.push(...outer.polygon);
     }
+    // The approach sector starts OUTSIDE the combined region, so it reaches
+    // well past the bands. Framing the bands alone left it half off-screen.
+    if (sectorPositions?.length) points.push(...sectorPositions);
     if (points.length < 2) return;
 
     map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: 17 });
@@ -77,7 +82,8 @@ const FacilityZones = ({ warped }) => (
 );
 
 const DualHazardMap = () => {
-  const dualZoneData = useFacilityStore((s) => s.dualZoneData);
+  // Live result normally; a growth-scaled copy while the simulation plays.
+  const dualZoneData = useFacilityStore((s) => s.getDisplayedDualZoneData());
   const secondFacilityConfig = useFacilityStore((s) => s.secondFacilityConfig);
   const facilityConfig = useFacilityStore((s) => s.facilityConfig);
 
@@ -124,6 +130,13 @@ const DualHazardMap = () => {
   }, [dualZoneData, centerA.lat, centerA.lng, centerB]);
 
   // Only size- and position-affecting inputs, per FitToHazardBounds' rule.
+  // Computed once here and reused by both the drawn sector and the fit bounds,
+  // so the framing can never disagree with the shape it is framing.
+  const sectorPositions = useMemo(
+    () => computeSectorPositions({ joint: jointApproach, midpoint, facilities }),
+    [jointApproach, midpoint, facilities]
+  );
+
   const fitKey = useMemo(
     () =>
       secondFacilityConfig
@@ -150,7 +163,7 @@ const DualHazardMap = () => {
       {/* Silence would read as "no hazard here". The backend's own reason
           string says why there is no recommendation instead. */}
       {jointApproach && jointApproach.available === false && (
-        <div className="pointer-events-none absolute left-3 top-3 z-[500] max-w-[min(22rem,60%)] rounded-card border border-alert-border bg-alert-surface px-3 py-2 shadow-overlay">
+        <div className="pointer-events-none absolute left-3 top-14 z-[500] max-w-[min(22rem,60%)] rounded-card border border-alert-border bg-alert-surface px-3 py-2 shadow-overlay">
           <p className="text-meta font-semibold text-ink">
             No joint safe approach available
           </p>
@@ -173,7 +186,11 @@ const DualHazardMap = () => {
         />
 
         <ResizeHandler />
-        <FitToDualBounds dualZoneData={dualZoneData} fitKey={fitKey} />
+        <FitToDualBounds
+          dualZoneData={dualZoneData}
+          fitKey={fitKey}
+          sectorPositions={sectorPositions}
+        />
 
         {/* Facility A -- its own bands, from its own compute. */}
         <FacilityZones warped={dualZoneData?.facility_a} />

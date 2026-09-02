@@ -1,6 +1,7 @@
 import React from 'react';
 import { Rewind } from 'lucide-react';
 import useFacilityStore from '../../store/useFacilityStore';
+import SimulationControl from './SimulationControl';
 
 // Overlays drawn on top of the dark map: light-on-dark with a subtle dark
 // backing so they stay legible against the tiles.
@@ -11,6 +12,8 @@ const MapOverlays = () => {
 
   return (
     <>
+      <SimulationControl />
+
       {/* Replay tag ON the map. The status bar already swaps LIVE for REPLAY,
           but the map is what gets looked at (and screenshotted) on its own,
           so the state it is drawing has to be readable without glancing up. */}
