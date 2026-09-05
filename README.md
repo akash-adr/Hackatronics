@@ -63,7 +63,7 @@ explanation of the exact numbers currently on screen
 
 No layer in this pipeline recomputes a calculation an earlier layer already performed. This isn't just clean architecture — it's what makes the whole system auditable: every number on screen can be traced back to exactly one place it was computed.
 
-### The physics
+### The Physics
 
 - **Thermal radiation** — a solid flame model: flame height via the Thomas correlation, flame tilt from wind, a full Mudan-Croce cylindrical view-factor calculation (how much of the flame a person at a given distance can actually "see"), and atmospheric transmissivity computed from a real water-vapour absorption correlation — so humidity genuinely changes the hazard radius, not just the number on a slider.
 - **Blast overpressure** — TNT-equivalent mass conversion, Hopkinson-Cranz cube-root scaling, and the Kinney-Graham closed-form approximation — a deliberate, disclosed trade-off against the more complex Kingery-Bulmash polynomials, chosen to reduce implementation risk without sacrificing physical validity.
