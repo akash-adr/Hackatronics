@@ -2,11 +2,11 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "der02-frontend",
+      "name": "frontend",
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "--prefix",
-        "der02-frontend",
+        "frontend",
         "run",
         "dev",
         "--",
